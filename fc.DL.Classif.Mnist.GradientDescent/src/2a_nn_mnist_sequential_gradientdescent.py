@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import os
+
 # load mnist
 print('Loading MNIST dataset (please wait)...')
 (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
@@ -22,13 +23,26 @@ nn = tf.keras.models.Sequential([
     tf.keras.layers.Dense(10, activation='softmax')
 ])
 
-# add optimizer, loss, and metric
-nn.compile( optimizer='adam', 
-            loss=tf.keras.losses.SparseCategoricalCrossentropy(), 
-            metrics=['accuracy'])
+loss_fn = tf.keras.losses.SparseCategoricalCrossentropy() 
 
-# train
-nn.fit(x_train, y_train, epochs=5)
+optimizer = tf.keras.optimizers.Adam(0.001)
+
+def train(model, loss_fn, x_train, y_train):
+    with tf.GradientTape() as g:
+        predictions = model(x_train, training=True)
+        loss = loss_fn(y_train, predictions)
+    gradients = g.gradient(loss, model.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, model.trainable_variables))
+    return loss
+
+train_loss = tf.keras.metrics.Mean(name='train_loss')
+
+# fit
+for epoch in range(50):
+    loss = train(nn, loss_fn, x_train, y_train)
+    # Accumule le cout dans la metrique (la metrique est une moyenne)
+    train_loss(loss)
+    print('Accumulation du loss moyen pour ce batch', loss.numpy(), 'dans la metrique de moyenne. La moyenne a ce stade est', train_loss.result().numpy())
 
 # Montre une image
 plt.imshow(x_test[0], cmap='gray')
