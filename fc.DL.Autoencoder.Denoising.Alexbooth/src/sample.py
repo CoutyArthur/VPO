@@ -8,6 +8,7 @@ if len(physical_devices) > 0:
 from data_manager import DataManager
 
 import matplotlib.pyplot as plt 
+import cv2
 
 from model import Encoder, Decoder
 
@@ -23,11 +24,13 @@ FLAGS = flags.FLAGS
 def sample(model, n_samples):
     """Passes n random samples through the model and displays X & X_pred"""
     manager = DataManager()
-    _, X = manager.get_batch(n_samples, use_noise=FLAGS.use_noise)
+    X, _ = manager.get_batch(n_samples, use_resize=FLAGS.use_noise, train=False)
     X_pred = model.predict(X)
-    x_dim, y_dim = X[0].shape[0], X[0].shape[1]
-    X_stitched = np.reshape(X.swapaxes(0,1), (x_dim, y_dim*n_samples))
-    X_pred_stitched = np.reshape(X_pred.swapaxes(0,1), (x_dim, y_dim*n_samples))
+    x_dim_32, y_dim_32 = X[0].shape[0], X[0].shape[1]
+    x_dim_64, y_dim_64 = X_pred[0].shape[0], X_pred[0].shape[1]
+    X_32_up = np.array([cv2.resize(img, (64, 64)) for img in X[...,0]])
+    X_stitched = np.reshape(X_32_up.swapaxes(0,1), (64, 64 * n_samples))
+    X_pred_stitched = np.reshape(X_pred[...,0].swapaxes(0,1), (x_dim_64, y_dim_64*n_samples))
     stitched_img = np.vstack((X_stitched, X_pred_stitched))
     plt.imshow(stitched_img, cmap='gray')
     plt.show()

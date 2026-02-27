@@ -34,6 +34,7 @@ def Decoder(Z):
     X = Deconv(16, 3)(X)
     X = Deconv(16, 5)(X)
     X = Deconv(16, 5)(X)
+    X = Deconv(16, 5)(X)
     X = Conv2D(1, 1)(X)
     return X 
 

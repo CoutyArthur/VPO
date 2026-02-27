@@ -41,8 +41,8 @@ def train(model):
     for epoch in range(n_epochs):
         print('Epoch', epoch, '/', n_epochs)
         for _ in tqdm(range(n_batches)):
-            X, X_noise = dm.get_batch(FLAGS.batch_size, True)
-            loss = model.train_on_batch(X_noise, X)
+            X_32, X_64 = dm.get_batch(FLAGS.batch_size, True, True)
+            loss = model.train_on_batch(X_32, X_64)
         print("Epoch {} - loss: {}".format(epoch, loss))
         save_model(model, epoch, loss)
     print("Finished training.")
