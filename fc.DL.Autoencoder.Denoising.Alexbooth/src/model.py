@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 
-from tensorflow.keras.layers import Conv2D, Conv2DTranspose, Dense, Flatten, Reshape
+from tensorflow.keras.layers import Conv2D, Conv2DTranspose, Dense, Flatten, Reshape,BatchNormalization,UpSampling2D,Activation,MaxPooling2D
 
 
 def Conv(n_filters, filter_width):
@@ -10,33 +10,76 @@ def Conv(n_filters, filter_width):
 
 def Deconv(n_filters, filter_width):
     return Conv2DTranspose(n_filters, filter_width, 
-                           strides=2, padding="same", activation="relu")
+                           strides=2, padding="same", activation=None)
 
 def Encoder(inputs):
-    X = Conv(16, 5)(inputs)
-    X = Conv(16, 5)(X)
-    X = Conv(16, 3)(X)
-    X = Conv(16, 3)(X)
+    # Bloc 1 : 32x32 -> 16x16
+    X = Conv(32, 5)(inputs)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+    #X = MaxPooling2D(2)(X)
+
+    # Bloc 2 : 16x16 -> 8x8
+    X = Conv(64, 5)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+    #X = MaxPooling2D(2)(X)
+    
+    # Bloc 3 : 8x8 -> 4x4
+    X = Conv(128, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+    #X = MaxPooling2D(2)(X)
+   
+    # Bloc 4 : 4x4 -> 2x2
+    X = Conv(256, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+    #X = MaxPooling2D(2)(X)
+    
     X = Flatten()(X)
-    X = Dense(128, activation="relu")(X)
-    X = Dense(64,  activation="relu")(X)
-    X = Dense(32,  activation="relu")(X)
-    Z = Dense(2,   activation="tanh", name="encoder_output")(X)
+    Z = Dense(1024, activation="relu", name="encoder_output")(X)
+
     return Z
 
+
 def Decoder(Z):
-    X = Dense(32,  activation="relu", name="decoder_input")(Z)
-    X = Dense(64,  activation="relu")(X)
-    X = Dense(128, activation="relu")(X)
-    X = Dense(64,  activation="relu")(X)
-    X = Reshape((2, 2, 16))(X)
+    # Reshape du vecteur latent en tenseur 2x2x256
+    X = Reshape((2, 2, 256), name="decoder_input")(Z)  
+
+    # Bloc 1 : 2x2 -> 4x4
+    X = Deconv(128, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+
+    # Bloc 2 : 4x4 -> 8x8
+    X = Deconv(64, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+
+    # Bloc 3 : 8x8 -> 16x16
+    X = Deconv(32, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+
+    # Bloc 4 : 16x16 -> 32x32
     X = Deconv(16, 3)(X)
-    X = Deconv(16, 3)(X)
-    X = Deconv(16, 5)(X)
-    X = Deconv(16, 5)(X)
-    X = Deconv(16, 5)(X)
-    X = Conv2D(1, 1)(X)
-    return X 
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+
+    # Bloc 5 : 32x32 -> 64x64
+    X = Deconv(8, 3)(X)
+    X = BatchNormalization()(X)
+    X = Activation("relu")(X)
+
+    # Bloc final : 64x64 -> 128x128
+   
+    X = Deconv(3,3)(X)
+    print("Avant sigmoid shape:", X.shape) 
+    X = Activation("sigmoid")(X)
+    print("Après sigmoid shape:", X.shape)
+
+    return X
 
 def AutoEncoder():
     X = tf.keras.Input(shape=(32, 32, 1))

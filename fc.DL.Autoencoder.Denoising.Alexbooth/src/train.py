@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import matplotlib.pyplot as plt 
 import numpy as np
 import tensorflow as tf
 physical_devices = tf.config.list_physical_devices('GPU')
@@ -15,18 +16,19 @@ from absl import flags
 
 from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import MSE
+from tensorflow.keras.losses import MeanSquaredError
 
 from model import AutoEncoder
 
 # Voir
 # https://github.com/alexbooth/DAE-Tensorflow-2.0
 
-flags.DEFINE_integer("epochs", 3, "number of epochs")
-flags.DEFINE_integer("batch_size", 32, "batch size")
-flags.DEFINE_float("learning_rate", 0.0001, "learning rate")
+flags.DEFINE_integer("epochs", 200, "number of epochs") #3
+flags.DEFINE_integer("batch_size", 15, "batch size")  #32
+flags.DEFINE_float("learning_rate", 0.002, "learning rate")
 flags.DEFINE_string("logdir", "./tmp/log", "log file directory")
-flags.DEFINE_boolean("keep_training", False, "continue training same weights")
-flags.DEFINE_boolean("keep_best", False, "only save model if it got the best loss")
+flags.DEFINE_boolean("keep_training", True, "continue training same weights")
+flags.DEFINE_boolean("keep_best", True, "only save model if it got the best loss")
 FLAGS = flags.FLAGS
 
 best_loss = np.inf
@@ -36,16 +38,35 @@ def train(model):
     dm = DataManager() 
     n_batches = dm.training_set_size // FLAGS.batch_size
     n_epochs = FLAGS.epochs
+    losses = []
 
-    loss = None
+    plt.ion()
+    fig, ax = plt.subplots(figsize=(10, 4))
+    line, = ax.plot([], [], color="royalblue", linewidth=2)
+    ax.set_title("Courbe de loss")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Loss")
+    ax.grid(True, alpha=0.3)
+
     for epoch in range(n_epochs):
         print('Epoch', epoch, '/', n_epochs)
         for _ in tqdm(range(n_batches)):
-            X_32, X_64 = dm.get_batch(FLAGS.batch_size, True, True)
-            loss = model.train_on_batch(X_32, X_64)
+            X_32, X_128 = dm.get_batch(FLAGS.batch_size, True, True)
+            loss = model.train_on_batch(X_32, X_128)
         print("Epoch {} - loss: {}".format(epoch, loss))
+        losses.append(loss)
         save_model(model, epoch, loss)
+
+        line.set_xdata(range(len(losses)))
+        line.set_ydata(losses)
+        ax.relim()
+        ax.autoscale_view()
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+
+
     print("Finished training.")
+    return losses
 
 def save_model(model, epoch, loss):
     """Write logs and save the model"""
@@ -64,6 +85,7 @@ def save_model(model, epoch, loss):
 def load_model():
     """Set up and return the model."""
     model = AutoEncoder()
+    print("Output shape:", model.output_shape)
     optimizer = Adam(FLAGS.learning_rate)
     loss = MSE
 
