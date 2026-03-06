@@ -35,7 +35,6 @@ class DataManager:
         DATASET_DIR = BASE_DIR / "celeba"
         images32 = []
         images128 = []
-        count = 0
         for image_path in DATASET_DIR.rglob("*.jpg"):
             img = Image.open(image_path.relative_to(BASE_DIR))
             img128 = img.resize((128,128)).convert("RGB")
@@ -43,6 +42,7 @@ class DataManager:
             img32 = img32.convert('L')
             images32.append(np.array(img32))
             images128.append(np.array(img128))
+
         celebaImg32 = np.array(images32)
         celebaImg128 = np.array(images128)
 
@@ -71,6 +71,11 @@ class DataManager:
 
         self.training_set_size = self.X32_train.shape[0]
 
+    def load_single_image(self, image_path) :
+        img = Image.open(image_path).convert('L')
+        img_array = np.array(img).astype("float32") / 255.0
+        return img_array
+    
 
     def get_batch(self, batch_size, use_resize=False,  train=False):
         """Returns tuple of (X, X_pred). Adds noise to X_pred if specified.
