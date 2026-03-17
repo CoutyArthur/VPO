@@ -30,30 +30,35 @@ def load_images():
     images = []
     for image_path in DATASET_DIR.rglob("*.jpg"):
         img = Image.open(image_path.relative_to(BASE_DIR))
-        img = img.convert('L')
-        img = img.resize((64,64))
+        img = img.resize((128,128)).convert("RGB")
         images.append(np.array(img))
 
     npImages = np.array(images)
-    npImages = npImages.astype(np.float32) / 255.0
+    npImages = npImages.reshape(npImages.shape[0], 128, 128, 3) 
+    npImages = npImages.astype(np.float32) / 127.5 - 1.0 
     indexes = np.random.choice(npImages.shape[0], size=10, replace=False)
     
-    return npImages[indexes, :, :, np.newaxis]
+    return npImages[indexes] 
 
 
-IMG_H = 64
-IMG_W = 64
+IMG_H = 128
+IMG_W = 128
 IMG_DIM = IMG_H * IMG_W 
 LATENT_DIM = 100
 
 def make_generator():
     model = tf.keras.Sequential(name="generator")
  
-    # Projection de l'espace latent vers un volume 4×4×256
-    model.add(tf.keras.layers.Dense(4 * 4 * 256, use_bias=False, input_dim=LATENT_DIM))
+    # Projection de l'espace latent vers un volume 2×2×512
+    model.add(tf.keras.layers.Dense(2 * 2 * 512, use_bias=False, input_dim=LATENT_DIM))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Reshape((4, 4, 256)))
+    model.add(tf.keras.layers.Reshape((2, 2, 512)))
+
+    # 2×2 → 4×4
+    model.add(tf.keras.layers.Conv2DTranspose(256, kernel_size=4, strides=2, padding='same', use_bias=False))
+    model.add(tf.keras.layers.BatchNormalization())
+    model.add(tf.keras.layers.LeakyReLU(0.2))
  
     # 4×4 → 8×8
     model.add(tf.keras.layers.Conv2DTranspose(128, kernel_size=4, strides=2, padding='same', use_bias=False))
@@ -69,13 +74,17 @@ def make_generator():
     model.add(tf.keras.layers.Conv2DTranspose(32, kernel_size=4, strides=2, padding='same', use_bias=False))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.LeakyReLU(0.2))
+    # 32×32 → 64×64
+    model.add(tf.keras.layers.Conv2DTranspose(16, kernel_size=4, strides=2, padding='same', use_bias=False))
+    model.add(tf.keras.layers.BatchNormalization())
+    model.add(tf.keras.layers.LeakyReLU(0.2))
  
-    # 32×32 → 64×64  (sortie finale)
-    model.add(tf.keras.layers.Conv2DTranspose(1, kernel_size=4, strides=2, padding='same', use_bias=False,
-                                     activation='sigmoid'))  # sigmoid → [0,1]
+    # 64×64 → 128×128  (sortie finale)
+    model.add(tf.keras.layers.Conv2DTranspose(3, kernel_size=4, strides=2, 
+           padding='same', use_bias=False, activation='tanh'))  # sortie [-1, 1]
  
     # Vérification de la forme de sortie
-    assert model.output_shape == (None, IMG_H, IMG_W, 1), \
+    assert model.output_shape == (None, IMG_H, IMG_W, 3), \
         f"Forme de sortie inattendue : {model.output_shape}"
  
     return model
@@ -83,6 +92,12 @@ def make_generator():
 
 def make_discriminator():
     model = tf.keras.Sequential(name="discriminator")
+
+    # 128×128 → 64×64
+    model.add(tf.keras.layers.Conv2D(16, kernel_size=4, strides=2, padding='same',
+                             input_shape=(IMG_H, IMG_W, 3)))
+    model.add(tf.keras.layers.LeakyReLU(0.2))
+    model.add(tf.keras.layers.Dropout(0.3))
  
     # 64×64 → 32×32
     model.add(tf.keras.layers.Conv2D(32, kernel_size=4, strides=2, padding='same',
@@ -102,6 +117,11 @@ def make_discriminator():
  
     # 8×8 → 4×4
     model.add(tf.keras.layers.Conv2D(256, kernel_size=4, strides=2, padding='same'))
+    model.add(tf.keras.layers.LeakyReLU(0.2))
+    model.add(tf.keras.layers.Dropout(0.3))
+
+    # 4×4 → 2×2
+    model.add(tf.keras.layers.Conv2D(512, kernel_size=4, strides=2, padding='same'))
     model.add(tf.keras.layers.LeakyReLU(0.2))
     model.add(tf.keras.layers.Dropout(0.3))
  
@@ -125,10 +145,16 @@ def make_gan(model_gen, model_disc):
 
 def train(model_gen, model_disc, model_gan, real_images):
 
-    n_epochs = 1000
+    n_epochs = 500
     batch_size = 2
     n_real = len(real_images)
     nb_batch = n_real // batch_size
+
+    d_fake_history = []
+    d_fake_avg_history = []
+
+    plt.ion()  # mode interactif : mise à jour en temps réel
+    fig, ax = plt.subplots(1, 1, figsize=(14, 4))
     
 
     for epoch in range(n_epochs):
@@ -152,25 +178,46 @@ def train(model_gen, model_disc, model_gan, real_images):
             loss_disc = model_disc.train_on_batch(X, y)
 
             # --- Entraînement générateur ---
-            for _ in range(3):
-  
-                noise = np.random.normal(0, 1, (batch_size, LATENT_DIM))
-                y_gen = np.ones((batch_size, 1))
-                model_disc.trainable = False
-                model_gan.train_on_batch(noise, y_gen)
+
+            noise = np.random.normal(0, 1, (batch_size, LATENT_DIM))
+            y_gen = np.ones((batch_size, 1))
+            model_disc.trainable = False
+            model_gan.train_on_batch(noise, y_gen)
 
             # --- Métriques D(real) et D(fake) ---
             d_real = model_disc.predict(real_batch, verbose=0).mean()
             d_fake = model_disc.predict(fake_batch, verbose=0).mean()
+        
+        
+        
+        d_fake_history.append(d_fake)
+        d_fake_avg_history.append(np.mean(d_fake_history))
+        
+
+        ax.clear()
+        ax.plot(d_fake_history, label='D(fake)', alpha=0.6)
+        ax.plot(d_fake_avg_history, label='Avg D(fake)', linewidth=2)
+        ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5, label='Idéal (0.5)')
+        ax.set_title("D(fake) au fil des epochs")
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("D(fake)")
+        ax.set_ylim(0, 1)
+        ax.legend()
+
+        fig.canvas.draw()
+        fig.canvas.flush_events()
+        plt.pause(0.1)
 
         print("Epoch {:4d} | loss disc: {:.4f} | D(real): {:.3f} | D(fake): {:.3f}".format(epoch, loss_disc, d_real, d_fake))
-        if (epoch + 1) % 5 == 0:  # toutes les 5 epochs
+        if (epoch + 1) % 25 == 0:  # toutes les 5 epochs
             model_gen.save(MODEL_GEN_PATH)
             model_disc.save(MODEL_DISC_PATH)
             print(f"  → Modèles sauvegardés (epoch {epoch+1})")
     model_gen.save(MODEL_GEN_PATH)
     model_disc.save(MODEL_DISC_PATH)
     print("Finished training.")
+    plt.ioff()
+    plt.show() 
 
 
 def interpolate(model_gen):
@@ -178,12 +225,12 @@ def interpolate(model_gen):
     z1 = np.random.normal(0, 1, (1, LATENT_DIM))
     z2 = np.random.normal(0, 1, (1, LATENT_DIM))
 
-    img1 = model_gen.predict(z1, verbose=0)[0, :, :, 0]
-    img2 = model_gen.predict(z2, verbose=0)[0, :, :, 0]
+    img1 = model_gen.predict(z1, verbose=0)[0]
+    img2 = model_gen.predict(z2, verbose=0)[0]
 
     # Point milieu dans l'espace latent
     z_mid = (z1 + z2) / 2.0
-    img_mid = model_gen.predict(z_mid, verbose=0)[0, :, :, 0]
+    img_mid = model_gen.predict(z_mid, verbose=0)[0]
 
     # Normalisation pour affichage
     def normalize(img):
@@ -193,15 +240,15 @@ def interpolate(model_gen):
     fig, axes = plt.subplots(1, 3, figsize=(10, 4))
     fig.suptitle("Interpolation dans l'espace latent", fontsize=14)
 
-    axes[0].imshow(normalize(img1), cmap='gray', vmin=0, vmax=1)
+    axes[0].imshow(normalize(img1), vmin=0, vmax=1)
     axes[0].set_title("z1")
     axes[0].axis('off')
 
-    axes[1].imshow(normalize(img_mid), cmap='gray', vmin=0, vmax=1)
+    axes[1].imshow(normalize(img_mid), vmin=0, vmax=1)
     axes[1].set_title("z_mid = (z1 + z2) / 2")
     axes[1].axis('off')
 
-    axes[2].imshow(normalize(img2), cmap='gray', vmin=0, vmax=1)
+    axes[2].imshow(normalize(img2), vmin=0, vmax=1)
     axes[2].set_title("z2")
     axes[2].axis('off')
 
@@ -214,7 +261,7 @@ def _show_single(img, title="Image générée"):
         return (x - x.min()) / (x.max() - x.min() + 1e-8)
  
     plt.figure(figsize=(4, 4))
-    plt.imshow(normalize(img), cmap='gray', vmin=0, vmax=1)
+    plt.imshow(normalize(img), vmin=0, vmax=1)
     plt.title(title)
     plt.axis('off')
     plt.tight_layout()
@@ -243,9 +290,7 @@ def infer_fixed(model_gen, z_values):
 
 def main(argv):
 
-    images = load_images()
-
-    real_images = images.reshape(len(images), IMG_H, IMG_W, 1)
+    real_images = load_images() 
 
     # Charger les modèles existants ou en créer de nouveaux
     if Path(MODEL_GEN_PATH).exists() and Path(MODEL_DISC_PATH).exists():
