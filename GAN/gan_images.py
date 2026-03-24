@@ -97,33 +97,33 @@ def make_discriminator():
     model.add(tf.keras.layers.Conv2D(16, kernel_size=4, strides=2, padding='same',
                              input_shape=(IMG_H, IMG_W, 3)))
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dropout(0.5))
  
     # 64×64 → 32×32
     model.add(tf.keras.layers.Conv2D(32, kernel_size=4, strides=2, padding='same',
                              input_shape=(IMG_H, IMG_W, 1)))
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dropout(0.5))
  
     # 32×32 → 16×16
     model.add(tf.keras.layers.Conv2D(64, kernel_size=4, strides=2, padding='same'))
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dropout(0.5))
  
     # 16×16 → 8×8
     model.add(tf.keras.layers.Conv2D(128, kernel_size=4, strides=2, padding='same'))
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dropout(0.5))
  
     # 8×8 → 4×4
     model.add(tf.keras.layers.Conv2D(256, kernel_size=4, strides=2, padding='same'))
     model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    model.add(tf.keras.layers.Dropout(0.5))
 
-    # 4×4 → 2×2
-    model.add(tf.keras.layers.Conv2D(512, kernel_size=4, strides=2, padding='same'))
-    model.add(tf.keras.layers.LeakyReLU(0.2))
-    model.add(tf.keras.layers.Dropout(0.3))
+    # # 4×4 → 2×2
+    # model.add(tf.keras.layers.Conv2D(512, kernel_size=4, strides=2, padding='same'))
+    # model.add(tf.keras.layers.LeakyReLU(0.2))
+    # model.add(tf.keras.layers.Dropout(0.3))
  
     model.add(tf.keras.layers.Flatten())
     model.add(tf.keras.layers.Dense(1, activation='sigmoid'))
@@ -139,14 +139,25 @@ def make_gan(model_gen, model_disc):
 
     model_gan.add(model_gen)
     model_gan.add(model_disc)
-    model_gan.compile(loss=tf.keras.losses.BinaryCrossentropy())
+    model_gan.compile(
+    optimizer=Adam(2e-4, beta_1=0.5),  loss='binary_crossentropy')
     return model_gan
+
+def augment_batch(batch):
+    augmented = []
+    for img in batch:
+        if np.random.rand() > 0.5:
+            img = img[:, ::-1, :]                          # flip horizontal
+        img = img + np.random.uniform(-0.05, 0.05)         # jitter luminosité
+        img = np.clip(img, -1.0, 1.0)
+        augmented.append(img)
+    return np.array(augmented)
 
 
 def train(model_gen, model_disc, model_gan, real_images):
 
-    n_epochs = 500
-    batch_size = 2
+    n_epochs = 1000
+    batch_size = 5
     n_real = len(real_images)
     nb_batch = n_real // batch_size
 
@@ -161,7 +172,7 @@ def train(model_gen, model_disc, model_gan, real_images):
         for _ in tqdm(range(nb_batch)):
             # Batch aléatoire d'images réelles
             idx = np.random.randint(0, n_real, batch_size)
-            real_batch = real_images[idx]
+            real_batch = augment_batch(real_images[idx])
 
             # Images générées
             noise = np.random.normal(0, 1, (batch_size, LATENT_DIM))
@@ -175,14 +186,17 @@ def train(model_gen, model_disc, model_gan, real_images):
 
             # --- Entraînement discriminateur ---
             model_disc.trainable = True
-            loss_disc = model_disc.train_on_batch(X, y)
+            noise_std = max(0.01, 0.05 * (1 - epoch / n_epochs))
+            X_noisy = np.clip(X + np.random.normal(0, noise_std, X.shape), -1., 1.)
+            loss_disc = model_disc.train_on_batch(X_noisy, y) 
+            #loss_disc = model_disc.train_on_batch(X, y)
 
             # --- Entraînement générateur ---
-
-            noise = np.random.normal(0, 1, (batch_size, LATENT_DIM))
-            y_gen = np.ones((batch_size, 1))
-            model_disc.trainable = False
-            model_gan.train_on_batch(noise, y_gen)
+            for _ in range(3):
+                noise = np.random.normal(0, 1, (batch_size, LATENT_DIM))
+                y_gen = np.ones((batch_size, 1))
+                model_disc.trainable = False
+                model_gan.train_on_batch(noise, y_gen)
 
             # --- Métriques D(real) et D(fake) ---
             d_real = model_disc.predict(real_batch, verbose=0).mean()
@@ -274,7 +288,7 @@ def infer_random(model_gen):
     print("np.array([" + ", ".join(f"{v:.6f}" for v in z[0]) + "])")
     print("=" * 60)
  
-    img = model_gen.predict(z, verbose=0)[0, :, :, 0]
+    img = model_gen.predict(z, verbose=0)[0]
     _show_single(img, title=f"Inférence aléatoire\nZ[0]={z[0,0]:.3f}, Z[1]={z[0,1]:.3f}, ...")
  
  
@@ -285,7 +299,7 @@ def infer_fixed(model_gen, z_values):
     print("np.array([" + ", ".join(f"{v:.6f}" for v in z[0]) + "])")
     print("=" * 60)
  
-    img = model_gen.predict(z, verbose=0)[0, :, :, 0]
+    img = model_gen.predict(z, verbose=0)[0]
     _show_single(img, title="Inférence Z fixé")
 
 def main(argv):
