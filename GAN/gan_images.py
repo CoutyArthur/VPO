@@ -16,6 +16,8 @@ from pathlib import Path
 
 from tensorflow.keras.optimizers import Adam
 
+#Attention ,il faut se placer dans le dossier "GAN" pour lancer ce programme
+
 #Pour l'inférence choisi, z est à modifier ligne 266
 flags.DEFINE_integer("show_mode", 0, "choix de mode entre interpolate = 0, inférence choisi = 1, inférence aléatoire = 2")
 FLAGS = flags.FLAGS
@@ -227,6 +229,18 @@ def train(model_gen, model_disc, model_gan, real_images):
             model_gen.save(MODEL_GEN_PATH)
             model_disc.save(MODEL_DISC_PATH)
             print(f"  → Modèles sauvegardés (epoch {epoch+1})")
+        
+        if epoch > 20 :
+            totalAvgD = 0
+            totalD = 0
+            for i in range(len(d_fake_history) - 10, len(d_fake_history)):
+                totalAvgD += d_fake_avg_history[i]
+                totalD += d_fake_history[i]
+            print(totalAvgD)
+            print(totalD)  
+            if(totalAvgD+0.01 > totalD and totalAvgD-0.01<totalD):
+                break
+    
     model_gen.save(MODEL_GEN_PATH)
     model_disc.save(MODEL_DISC_PATH)
     print("Finished training.")
