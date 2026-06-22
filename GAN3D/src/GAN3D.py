@@ -15,12 +15,14 @@ from scipy.ndimage import label
 from tensorflow.keras.optimizers import Adam
 
 flags.DEFINE_integer("show_mode", 0, "0=interpolate, 1=inférence fixe, 2=inférence aléatoire")
+
 FLAGS = flags.FLAGS
 
 # =============================================================================
 # PARAMÈTRES PRINCIPAUX & DIMENSIONS
 # =============================================================================
-SINGLE_OBJECT_MODE = False
+
+SINGLE_OBJECT_MODE = True
 OBJECT_NAME = "airplane"
 ALL_OBJECTS = ["airplane", "bathtub", "bed", "bench", "bookshelf"]
 
@@ -31,22 +33,24 @@ PADDING = 1
 # =============================================================================
 # HYPERPARAMÈTRES D'ENTRAÎNEMENT & CONVERGENCE
 # =============================================================================
-STEPS_PER_EPOCH  = 40
-BATCH_SIZE       = 8
+
+STEPS_PER_EPOCH  = 10
+BATCH_SIZE       = 128
 N_EPOCHS_MAX     = 1000
-MIN_EPOCHS       = 40
+MIN_EPOCHS       = 30
 CONV_WINDOW      = 10
 CONV_PATIENCE    = 10
-CONV_MEAN_TOL    = 0.05
-CONV_STD_TOL     = 0.008
+CONV_MEAN_TOL    = 0.08
+CONV_STD_TOL     = 0.04
 VISU_EVERY       = 10
 
-LR_DISC = 7e-6 
-LR_GAN  = 1e-3
+LR_DISC = 2e-4
+LR_GAN  = 2e-4
 
 # =============================================================================
 # CHARGEMENT DES DONNÉES
 # =============================================================================
+
 def _load_mat_files(object_name: str, split: str = "train") -> list:
     BASE_DIR    = Path(__file__).parent.parent
     DATASET_DIR = BASE_DIR / "data" / object_name / "30" / split
@@ -55,6 +59,7 @@ def _load_mat_files(object_name: str, split: str = "train") -> list:
         print(f"[ERREUR] Aucun fichier .mat dans {DATASET_DIR}")
     return mat_files
 
+
 def _mat_to_voxel(path: Path, normalise: bool = True) -> np.ndarray:
     """Charge un .mat → tableau float32 (32,32,32) """
     mat   = sio.loadmat(str(path))
@@ -62,6 +67,7 @@ def _mat_to_voxel(path: Path, normalise: bool = True) -> np.ndarray:
     if PADDING > 0:
         voxel = np.pad(voxel, pad_width=PADDING, mode="constant", constant_values=0.0)
     return voxel * 2.0 - 1.0
+
 
 def load_voxel(object_name: str = None) -> np.ndarray:
     name  = object_name or OBJECT_NAME
@@ -73,6 +79,7 @@ def load_voxel(object_name: str = None) -> np.ndarray:
     if PADDING > 0:
         voxel = np.pad(voxel, pad_width=PADDING, mode="constant", constant_values=0.0)
     return voxel
+
 
 def load_all_voxels(object_names: list = None) -> tuple:
     names  = object_names or ([OBJECT_NAME] if SINGLE_OBJECT_MODE else ALL_OBJECTS)
@@ -89,13 +96,14 @@ def load_all_voxels(object_names: list = None) -> tuple:
     print(f"Dataset chargé : {arr.shape} objets={names}")
     return arr, labels
 
+
 def load_reference_voxels(object_names: list = None) -> tuple:
     names = object_names or ([OBJECT_NAME] if SINGLE_OBJECT_MODE else ALL_OBJECTS)
     ref_voxels, ref_names = [], []
     for name in names:
         # Charger PLUSIEURS fichiers test, pas juste files[0]
         files = _load_mat_files(name, split="test")
-        for path in files: 
+        for path in files:
             mat   = sio.loadmat(str(path))
             voxel = mat["instance"].astype(np.float32)
             if PADDING > 0:
@@ -104,52 +112,76 @@ def load_reference_voxels(object_names: list = None) -> tuple:
             ref_names.append(name)
     return ref_voxels, ref_names
 
+
 # =============================================================================
 # ARCHITECTURES DES MODÈLES
 # =============================================================================
+
 def make_generator() -> tf.keras.Model:
+
+    # 1 -> 2
     model = tf.keras.Sequential(name="generator")
     model.add(tf.keras.layers.Dense(2*2*2*512, use_bias=False, input_dim=LATENT_DIM))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.ReLU())
     model.add(tf.keras.layers.Reshape((2, 2, 2, 512)))
 
+    # 2 -> 4
     model.add(tf.keras.layers.Conv3DTranspose(256, kernel_size=4, strides=2, padding='same', use_bias=False))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.ReLU())
     model.add(tf.keras.layers.Dropout(0.1))
 
+    # 4 -> 8
     model.add(tf.keras.layers.Conv3DTranspose(128, kernel_size=4, strides=2, padding='same', use_bias=False))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.ReLU())
     model.add(tf.keras.layers.Dropout(0.1))
 
+    # 8 -> 16
     model.add(tf.keras.layers.Conv3DTranspose(64, kernel_size=4, strides=2, padding='same', use_bias=False))
     model.add(tf.keras.layers.BatchNormalization())
     model.add(tf.keras.layers.ReLU())
 
+    # 16 -> 32
     model.add(tf.keras.layers.Conv3DTranspose(1, kernel_size=4, strides=2, padding='same', use_bias=False, activation='tanh'))
     return model
 
+
+
 def make_discriminator() -> tf.keras.Model:
+
     model = tf.keras.Sequential(name="discriminator")
 
     # 32 → 16  (pas de BN sur la première couche — standard DCGAN)
-    model.add(tf.keras.layers.Conv3D(64, kernel_size=4, strides=2, padding='same',
-                                     input_shape=(IMG_H, IMG_W, IMG_D, 1)))
-    model.add(tf.keras.layers.LeakyReLU(0.2))
+    model.add(tf.keras.layers.Conv3D(64, kernel_size=4, strides=2, padding='same', input_shape=(IMG_H, IMG_W, IMG_D, 1)))
+    model.add(tf.keras.layers.LeakyReLU(0.3))
 
     # 16 → 8
     model.add(tf.keras.layers.Conv3D(128, kernel_size=4, strides=2, padding='same'))
     model.add(tf.keras.layers.LeakyReLU(0.2))
+    model.add(tf.keras.layers.Dropout(0.3))
+
+    # # 8 → 4
+    # model.add(tf.keras.layers.Conv3D(256, kernel_size=4, strides=2, padding='same'))
+    # model.add(tf.keras.layers.LeakyReLU(0.2))
+    # model.add(tf.keras.layers.Dropout(0.3))
+
+    # # 4 → 2
+    # model.add(tf.keras.layers.Conv3D(512, kernel_size=4, strides=2, padding='same'))
+    # model.add(tf.keras.layers.LeakyReLU(0.2))
+    # model.add(tf.keras.layers.Dropout(0.3))
 
     model.add(tf.keras.layers.Flatten())
     model.add(tf.keras.layers.Dense(1, activation='sigmoid'))
     return model
 
+
+
 # =============================================================================
 # NETTOYAGE & GÉNÉRATION
 # =============================================================================
+
 def _remove_noise(voxel: np.ndarray, min_size: int = 4) -> np.ndarray:
     labeled, n = label(voxel)
     cleaned = np.zeros_like(voxel)
@@ -157,6 +189,8 @@ def _remove_noise(voxel: np.ndarray, min_size: int = 4) -> np.ndarray:
         if (labeled == i).sum() >= min_size:
             cleaned |= (labeled == i)
     return cleaned
+
+
 
 def generate_voxel(model_gen, z: np.ndarray = None, threshold: float = 0.0) -> np.ndarray:
     """Seuil à 0.5 car la sortie du générateur est une Sigmoid [0, 1]."""
@@ -166,9 +200,11 @@ def generate_voxel(model_gen, z: np.ndarray = None, threshold: float = 0.0) -> n
     voxel = out > threshold
     return _remove_noise(voxel), z
 
+
 # =============================================================================
 # CONVERGENCE
 # =============================================================================
+
 def _has_converged(d_fake_history: list, epoch: int) -> bool:
     if epoch < MIN_EPOCHS or len(d_fake_history) < CONV_WINDOW:
         return False
@@ -183,19 +219,23 @@ def _has_converged(d_fake_history: list, epoch: int) -> bool:
             consecutive += 1
         else:
             break
+
     return consecutive >= CONV_PATIENCE
 
-def train(model_gen, model_disc, model_disc_frozen, model_gan, real_voxels: np.ndarray):
+
+
+def train(model_gen, model_disc, model_disc_frozen,  model_gan, real_voxels: np.ndarray):
+
     n_real = len(real_voxels)
     d_fake_history, d_fake_avg_history = [], []
- 
+
     plt.ion()
     fig_curves, ax_curves = affiche.create_curves_figure()
     fig_3d, ax_3d = affiche.create_live3d_figure()
- 
+
     # Nombre de batches par époque
     steps_per_epoch = max(1, n_real // BATCH_SIZE)
- 
+
     for epoch in range(N_EPOCHS_MAX):
         for step in tqdm(range(STEPS_PER_EPOCH), desc=f"Epoch {epoch:4d}", ncols=80):
             idx        = np.random.choice(n_real, BATCH_SIZE, replace=True)
@@ -206,15 +246,14 @@ def train(model_gen, model_disc, model_disc_frozen, model_gan, real_voxels: np.n
             y_real = np.random.uniform(0.7, 1.0, (BATCH_SIZE, 1))
             y_fake = np.random.uniform(0.0, 0.15, (BATCH_SIZE, 1))
 
-            # Entraîner le discriminateur
             loss_d_real = model_disc.train_on_batch(real_batch, y_real)
             loss_d_fake = model_disc.train_on_batch(fake_batch, y_fake)
-            
-            # Synchroniser les poids vers la version figée
+
+            # Resynchroniser la copie figée AVANT d'entraîner le générateur
             model_disc_frozen.set_weights(model_disc.get_weights())
 
             # Entraîner le générateur via model_gan (disc_frozen inchangé)
-            for _ in range(2):
+            for _ in range(1):
                 noise_g = np.random.normal(0, 1, (BATCH_SIZE, LATENT_DIM))
                 loss_g  = model_gan.train_on_batch(noise_g, np.ones((BATCH_SIZE, 1)))
 
@@ -226,35 +265,36 @@ def train(model_gen, model_disc, model_disc_frozen, model_gan, real_voxels: np.n
 
         d_real = model_disc(real_m,  training=False).numpy().mean()
         d_fake = model_disc(fake_m,  training=False).numpy().mean()
- 
+
         d_fake_history.append(d_fake)
         window = d_fake_history[-20:] if len(d_fake_history) >= 20 else d_fake_history
         d_fake_avg_history.append(np.mean(window))
- 
+
         loss_d = (loss_d_real + loss_d_fake) / 2.0
         print(f"Epoch {epoch:4d} | "
               f"loss_d={loss_d:.4f}  loss_g={loss_g:.4f} | "
               f"D(real)={d_real:.3f}  D(fake)={d_fake:.3f}")
- 
+
         # ── Courbe D(fake) ────────────────────────────────────────────────────
         affiche.update_curves_figure(fig_curves, ax_curves, d_fake_history, d_fake_avg_history, epoch, d_fake)
- 
+
         # ── Visualisation 3D live ─────────────────────────────────────────────
         if epoch % VISU_EVERY == 0:
             voxel_live, _ = generate_voxel(model_gen)
             affiche.update_live3d_figure(fig_3d, ax_3d, voxel_live, epoch, IMG_H, IMG_W, IMG_D)
- 
+
         # ── Critère de convergence ────────────────────────────────────────────
         if _has_converged(d_fake_history, epoch):
             print(f"\n✓ Convergence à l'epoch {epoch}.")
             break
- 
+
     print("─── Entraînement terminé ───")
     affiche.finalize_training_figures(fig_curves, fig_3d)
 
 # =============================================================================
 # EVALUATION & BOUCLE INTERACTIVE
 # =============================================================================
+
 def voxel_iou(a: np.ndarray, b: np.ndarray) -> float:
     """
     a : voxel généré  (sortie tanh, valeurs dans [-1, 1]) → seuil à 0.0
@@ -266,7 +306,10 @@ def voxel_iou(a: np.ndarray, b: np.ndarray) -> float:
     union = np.logical_or(a_bin, b_bin).sum()
     return float(inter) / (float(union) + 1e-8)
 
+
+
 def find_nearest_voxel(generated: np.ndarray, ref_voxels: list, ref_names: list) -> tuple:
+
     best_iou, best_v, best_n = -1, None, None
     for v, n in zip(ref_voxels, ref_names):
         iou = voxel_iou(generated, v)
@@ -274,13 +317,16 @@ def find_nearest_voxel(generated: np.ndarray, ref_voxels: list, ref_names: list)
             best_iou, best_v, best_n = iou, v, n
     return best_v, best_n, best_iou
 
+
 def show_sample_loop(model_gen, ref_voxels: list, ref_names: list):
+
     print("\n─────────────────────────────────────────────")
     print("  Appuyez sur [ENTRÉE] pour un nouvel échantillon.")
     print("  Appuyez sur [Ctrl+C] puis [ENTRÉE] pour quitter.")
     print("─────────────────────────────────────────────\n")
 
     fig = affiche.create_comparison_figure()
+
     while True:
         try:
             input()
@@ -290,11 +336,11 @@ def show_sample_loop(model_gen, ref_voxels: list, ref_names: list):
 
         gen_voxel, z = generate_voxel(model_gen)
         nearest_voxel, nearest_name, iou = find_nearest_voxel(gen_voxel, ref_voxels, ref_names)
-
         affiche.update_comparison_figure(fig, gen_voxel, nearest_voxel, nearest_name, iou, IMG_H, IMG_W, IMG_D)
 
+
+
 def latent_sensitivity(model_gen):
-    
 
     z1 = np.random.normal(0, 1, (1, LATENT_DIM))
     z2 = np.random.normal(0, 1, (1, LATENT_DIM))
@@ -313,8 +359,12 @@ def latent_sensitivity(model_gen):
         v1 = out1 > threshold
         v2 = out2 > threshold
         diff_bin = np.mean(v1 != v2)
+
         print(f"threshold={threshold:.1f}  voxels_différents={diff_bin:.4f}  "
             f"voxels_actifs={v1.mean():.3f}")
+
+
+
 
 
 def main(argv):
@@ -326,19 +376,18 @@ def main(argv):
     else :
         print(f"  Mode : {mode_str}    Objets : {ALL_OBJECTS}")
     print(f"{'='*50}\n")
- 
+
     # Données
     real_voxels, _ = load_all_voxels()
     ref_voxels, ref_names = load_reference_voxels()
 
     model_gen  = make_generator()
-    
-    # Discriminateur entraînable — utilisé seul
+
     model_disc = make_discriminator()
     model_disc.compile(optimizer=Adam(LR_DISC, beta_1=0.5), loss='binary_crossentropy')
 
-    # Discriminateur figé — utilisé dans model_gan
-    # Il partage les mêmes poids que model_disc
+    # Copie figée : jamais entraînée directement, elle ne sert qu'à fournir
+    # le gradient vers le générateur dans model_gan.
     model_disc_frozen = make_discriminator()
     model_disc_frozen.set_weights(model_disc.get_weights())
     model_disc_frozen.trainable = False
@@ -349,7 +398,7 @@ def main(argv):
     train(model_gen, model_disc, model_disc_frozen, model_gan, real_voxels)
 
     latent_sensitivity(model_gen)
- 
+
     # Échantillonnage interactif
     show_sample_loop(model_gen, ref_voxels, ref_names)
 
