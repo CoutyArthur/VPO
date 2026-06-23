@@ -9,6 +9,7 @@ if len(physical_devices) > 0:
     tf.config.experimental.set_memory_growth(physical_devices[0], True)
 
 from tqdm import tqdm
+import time 
 from absl import app, flags
 from pathlib import Path
 from scipy.ndimage import label
@@ -236,6 +237,8 @@ def train(model_gen, model_disc, model_disc_frozen,  model_gan, real_voxels: np.
     # Nombre de batches par époque
     steps_per_epoch = max(1, n_real // BATCH_SIZE)
 
+    t_start = time.time()
+
     for epoch in range(N_EPOCHS_MAX):
         for step in tqdm(range(STEPS_PER_EPOCH), desc=f"Epoch {epoch:4d}", ncols=80):
             idx        = np.random.choice(n_real, BATCH_SIZE, replace=True)
@@ -288,7 +291,11 @@ def train(model_gen, model_disc, model_disc_frozen,  model_gan, real_voxels: np.
             print(f"\n✓ Convergence à l'epoch {epoch}.")
             break
 
-    print("─── Entraînement terminé ───")
+    t_end = time.time()
+    duree = t_end - t_start
+    minutes  = int((duree % 3600) // 60)
+    secondes = int(duree % 60)
+    print(f"─── Entraînement terminé en {minutes:02d}m{secondes:02d}s ")
     affiche.finalize_training_figures(fig_curves, fig_3d)
 
 # =============================================================================
@@ -339,34 +346,6 @@ def show_sample_loop(model_gen, ref_voxels: list, ref_names: list):
         affiche.update_comparison_figure(fig, gen_voxel, nearest_voxel, nearest_name, iou, IMG_H, IMG_W, IMG_D)
 
 
-
-def latent_sensitivity(model_gen):
-
-    z1 = np.random.normal(0, 1, (1, LATENT_DIM))
-    z2 = np.random.normal(0, 1, (1, LATENT_DIM))
-    z3 = np.random.normal(0, 1, (1, LATENT_DIM))
-
-    out1 = model_gen(z1, training=False).numpy()[0,...,0]
-    out2 = model_gen(z2, training=False).numpy()[0,...,0]
-    out3 = model_gen(z3, training=False).numpy()[0,...,0]
-
-    print(f"out1 min={out1.min():.3f} max={out1.max():.3f} mean={out1.mean():.3f}")
-    print(f"out2 min={out2.min():.3f} max={out2.max():.3f} mean={out2.mean():.3f}")
-    print(f"diff 1-2: {np.abs(out1-out2).mean():.4f}")
-    print(f"diff 1-3: {np.abs(out1-out3).mean():.4f}")
-
-    for threshold in [-0.8, -0.5, -0.3, 0.0]:
-        v1 = out1 > threshold
-        v2 = out2 > threshold
-        diff_bin = np.mean(v1 != v2)
-
-        print(f"threshold={threshold:.1f}  voxels_différents={diff_bin:.4f}  "
-            f"voxels_actifs={v1.mean():.3f}")
-
-
-
-
-
 def main(argv):
 
     mode_str = "SINGLE" if SINGLE_OBJECT_MODE else "MULTI (5 objets)"
@@ -396,8 +375,6 @@ def main(argv):
     model_gan.compile(optimizer=Adam(LR_GAN, beta_1=0.5), loss='binary_crossentropy')
 
     train(model_gen, model_disc, model_disc_frozen, model_gan, real_voxels)
-
-    latent_sensitivity(model_gen)
 
     # Échantillonnage interactif
     show_sample_loop(model_gen, ref_voxels, ref_names)
